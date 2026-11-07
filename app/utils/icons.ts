@@ -1,4 +1,9 @@
-// Every icon name of the app, written out in full so the Nuxt Icon scan bundles it
+/**
+ * Single source of truth for every icon used in the app. Check here before
+ * picking an icon for a new usage — reuse an existing constant if the
+ * concept already exists, rather than introducing a second icon for the
+ * same idea.
+ */
 export const ICONS = {
   arrowLeft: 'i-lucide-arrow-left',
   arrowRight: 'i-lucide-arrow-right',
