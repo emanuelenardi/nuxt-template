@@ -1,9 +1,14 @@
-// Script version: 3 (shared by the projects: keep the copies identical and bump this number on every change)
+// Script version: 4 (shared by the projects: keep the copies identical and bump this number on every change)
 // Checks the i18n/locales/*.json files of the project:
-//   1. every literal t('...') / $t('...') key in app/, server/ and shared/ exists in the default locale
+//   1. no key is written twice in the same object of a locale file: JSON.parse keeps only the last
+//      one, so the first value would be lost without any warning
+//   2. every literal t('...') / $t('...') key in app/, server/ and shared/ exists in the default locale
 //      (it.json, or the first file when there is no it.json); template-literal keys are not checked
-//   2. with two or more locale files, every locale has the same keys as all the others
-// With a single locale file, only the first check runs. Exits with 1 when anything is wrong.
+//   3. with two or more locale files, every locale has the same keys as all the others, except the
+//      keys under a `--default-locale-only <prefix>` (repeatable), which only the default locale has
+//      (e.g. `--default-locale-only admin.` for an Italian-only back office)
+// Exits with 1 when any of these fails. It also warns, without failing, about the keys of the
+// default locale that no source file seems to use: a key built at runtime can't be found for sure.
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, extname, basename } from 'node:path'
 
@@ -14,8 +19,18 @@ const SOURCE_EXTENSIONS = new Set(['.vue', '.ts'])
 const SKIPPED_DIRECTORIES = new Set(['node_modules', '.nuxt', '.output'])
 const DEFAULT_LOCALE = 'it'
 
+/** The key prefixes only the default locale translates, from `--default-locale-only <prefix>` */
+const defaultLocaleOnlyPrefixes = process.argv
+  .flatMap((argument, index) =>
+    argument === '--default-locale-only' && process.argv[index + 1] ? [process.argv[index + 1]] : [])
+
 // Literal-key calls only; template-literal and variable keys can't be resolved statically
 const CALL_PATTERN = /\$?\bt\(\s*['"]([a-zA-Z0-9_.]+)['"]/g
+// Any quoted dotted string: a key can also be passed around before reaching t() (labelKey: '...')
+const QUOTED_KEY_PATTERN = /['"`]([a-zA-Z][\w-]*(?:\.[\w-]+)+)['"`]/g
+// The fixed start of a key built at runtime: `status.${value}`, 'status.' + value, or one with the
+// variable inside a segment, `bracket.level${level}.name`
+const DYNAMIC_PREFIX_PATTERN = /['"`]([a-zA-Z][\w-]*\.(?:[\w-]+\.)*[\w-]*)(?:\$\{|['"]\s*\+)/g
 
 function flattenKeys(object, prefix = '', keys = new Set()) {
   for (const [key, value] of Object.entries(object)) {
@@ -27,6 +42,52 @@ function flattenKeys(object, prefix = '', keys = new Set()) {
     }
   }
   return keys
+}
+
+/**
+ * Lists the keys written twice in the same object, with their lines. A small scanner over the
+ * JSON text, since JSON.parse drops the duplicates before anything can see them
+ */
+function findDuplicateKeys(text) {
+  const duplicates = []
+  // One entry per open object or array: the keys seen so far (objects only) and the key it sits under
+  const stack = []
+  let pendingKey
+  let line = 1
+  let index = 0
+  while (index < text.length) {
+    const character = text[index]
+    if (character === '\n') line += 1
+    if (character === '"') {
+      let end = index + 1
+      while (text[end] !== '"') end += text[end] === '\\' ? 2 : 1
+      const value = JSON.parse(text.slice(index, end + 1))
+      let next = end + 1
+      while (/\s/.test(text[next])) next += 1
+      const scope = stack.at(-1)
+      if (text[next] === ':' && scope?.keys) {
+        if (scope.keys.has(value)) {
+          const path = [...stack.map(entry => entry.name).filter(Boolean), value].join('.')
+          duplicates.push({ path, firstLine: scope.keys.get(value), secondLine: line })
+        } else {
+          scope.keys.set(value, line)
+        }
+        pendingKey = value
+      }
+      index = end + 1
+      continue
+    }
+    if (character === '{' || character === '[') {
+      stack.push({ name: pendingKey, keys: character === '{' ? new Map() : undefined })
+      pendingKey = undefined
+    } else if (character === '}' || character === ']') {
+      stack.pop()
+    } else if (character === ',') {
+      pendingKey = undefined
+    }
+    index += 1
+  }
+  return duplicates
 }
 
 function listSourceFiles(directory, files = []) {
@@ -55,15 +116,29 @@ if (localeFiles.length === 0) {
   process.exit(2)
 }
 
-const keysByLocale = new Map(localeFiles.map(file => [
+const textByLocale = new Map(localeFiles.map(file => [
   basename(file, '.json'),
-  flattenKeys(JSON.parse(readFileSync(join(LOCALES_DIRECTORY, file), 'utf8')))
+  readFileSync(join(LOCALES_DIRECTORY, file), 'utf8')
+]))
+const keysByLocale = new Map([...textByLocale].map(([locale, text]) => [
+  locale,
+  flattenKeys(JSON.parse(text))
 ]))
 const defaultLocale = keysByLocale.has(DEFAULT_LOCALE) ? DEFAULT_LOCALE : keysByLocale.keys().next().value
 const defaultKeys = keysByLocale.get(defaultLocale)
 
-// Literal keys used in the code but missing from the default locale
+// Keys written twice in the same object
+const duplicatesByLocale = new Map()
+for (const [locale, text] of textByLocale) {
+  const duplicates = findDuplicateKeys(text)
+  if (duplicates.length > 0) duplicatesByLocale.set(locale, duplicates)
+}
+
+// Literal keys used in the code but missing from the default locale, and every key the code seems
+// to use, for the unused-key warning
 const missingInDefault = new Map()
+const usedKeys = new Set()
+const dynamicPrefixes = new Set()
 for (const directory of SOURCE_DIRECTORIES) {
   let files
   try {
@@ -79,17 +154,37 @@ for (const directory of SOURCE_DIRECTORIES) {
       if (!missingInDefault.has(key)) missingInDefault.set(key, new Set())
       missingInDefault.get(key).add(file.slice(ROOT.length + 1))
     }
+    for (const match of content.matchAll(QUOTED_KEY_PATTERN)) usedKeys.add(match[1])
+    for (const match of content.matchAll(DYNAMIC_PREFIX_PATTERN)) dynamicPrefixes.add(match[1])
   }
 }
+const unusedKeys = sortedList([...defaultKeys].filter(key =>
+  !usedKeys.has(key) && ![...dynamicPrefixes].some(prefix => key.startsWith(prefix))))
 
 // Keys that some locales have and others lack
 const missingByLocale = new Map()
 if (keysByLocale.size > 1) {
-  const allKeys = new Set([...keysByLocale.values()].flatMap(keys => [...keys]))
+  const isTranslated = key => !defaultLocaleOnlyPrefixes.some(prefix => key.startsWith(prefix))
+  const allKeys = new Set([...keysByLocale.values()].flatMap(keys => [...keys].filter(isTranslated)))
   for (const [locale, keys] of keysByLocale) {
     const missing = sortedList([...allKeys].filter(key => !keys.has(key)))
     if (missing.length > 0) missingByLocale.set(locale, missing)
   }
+}
+
+if (unusedKeys.length > 0) {
+  console.warn(`Warning: ${unusedKeys.length} key(s) of ${defaultLocale}.json no source file seems to use`
+    + ' (a key built at runtime can\'t be found for sure):\n')
+  for (const key of unusedKeys) console.warn(`  ${key}`)
+  console.warn('')
+}
+
+for (const [locale, duplicates] of duplicatesByLocale) {
+  console.error(`${duplicates.length} key(s) written twice in ${locale}.json (only the last value is kept):\n`)
+  for (const duplicate of duplicates) {
+    console.error(`  ${duplicate.path}: lines ${duplicate.firstLine} and ${duplicate.secondLine}`)
+  }
+  console.error('')
 }
 
 if (missingInDefault.size > 0) {
@@ -105,10 +200,10 @@ for (const [locale, missing] of missingByLocale) {
   for (const key of missing) console.error(`  ${key}`)
 }
 
-if (missingInDefault.size > 0 || missingByLocale.size > 0) process.exit(1)
+if (duplicatesByLocale.size > 0 || missingInDefault.size > 0 || missingByLocale.size > 0) process.exit(1)
 
 const localeNames = [...keysByLocale.keys()].join(', ')
 const parityNote = keysByLocale.size > 1
   ? `all locales have the same keys (${localeNames})`
   : `single locale (${localeNames}), parity check skipped`
-console.log(`All literal t() keys exist in ${defaultLocale}.json; ${parityNote}.`)
+console.log(`No duplicate keys; all literal t() keys exist in ${defaultLocale}.json; ${parityNote}.`)
