@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/fallow/schema.json",
+  // Used by name, never imported: Nuxt Icon reads the collections, nuxt typecheck runs vue-tsc
+  "ignoreDependencies": [
+    "@iconify-json/circle-flags",
+    "@iconify-json/lucide",
+    "@iconify-json/simple-icons",
+    "vue-tsc"
+  ],
+  "health": {
+    "thresholdOverrides": [
+      {
+        "files": ["scripts/**"],
+        "maxCrap": 60,
+        "reason": "Command-line checks are exercised by running them in CI, not by unit tests."
+      }
+    ]
+  }
+}

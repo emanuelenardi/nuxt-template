@@ -1,0 +1,133 @@
+name: ci & deploy
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # A newer push cancels a superseded run on branches, but never a main run, which may be deploying
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # cloudflare-access, version 1: the same job is in every project deployed to Cloudflare, only the
+  # env block changes. It runs first, so a wrong account or token fails in seconds instead of after
+  # the build.
+  cloudflare-access:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-26.04
+
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: nuxt-template
+      # Empty when the Worker has no custom domain to check
+      WORKER_HOSTNAME: ""
+
+    steps:
+      - name: Check the account and the token permissions
+        run: |
+          api() {
+            curl --silent --show-error \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4$1"
+          }
+          succeeded() { jq -e '.success == true' > /dev/null; }
+          fail() { echo "::error::$1"; exit 1; }
+
+          # Only Account API tokens verify on this endpoint: a User API token is rejected on purpose.
+          # It does not prove the token belongs to this account, the next check does
+          token_check=$(api "/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify")
+          [ "$(jq -r '.result.status // empty' <<< "$token_check")" = "active" ] \
+            || fail "CLOUDFLARE_API_TOKEN is not an active Account API token (User API tokens are not accepted): $(jq -c '.errors' <<< "$token_check")"
+
+          scripts=$(api "/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts")
+          succeeded <<< "$scripts" \
+            || fail "The token cannot list the Workers of the account in CLOUDFLARE_ACCOUNT_ID: it belongs to another account, or lacks Workers Editor. API errors: $(jq -c '.errors' <<< "$scripts")"
+
+          # With the domain already attached, Workers Editor is enough to deploy: only adding or
+          # changing a route also needs Workers Routes Write on the zone
+          if [ -n "$WORKER_HOSTNAME" ]; then
+            domains=$(api "/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/domains?service=$WORKER_NAME&hostname=$WORKER_HOSTNAME")
+            jq -e '.success == true and (.result | length) > 0' > /dev/null <<< "$domains" \
+              || fail "$WORKER_HOSTNAME is not attached to the $WORKER_NAME Worker: attach it in the dashboard, or give the token Zone > Workers Routes > Write. API errors: $(jq -c '.errors' <<< "$domains")"
+          fi
+
+          echo "The token reaches the account${WORKER_HOSTNAME:+ and $WORKER_HOSTNAME is attached to $WORKER_NAME}"
+
+  ci:
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install node
+        uses: actions/setup-node@v7
+        with:
+          # Reads volta.node, so CI runs the exact version pinned for local work
+          node-version-file: package.json
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check translation keys
+        run: pnpm run check:i18n
+
+      - name: Check dead code
+        run: pnpm run fallow:dead-code
+
+      # The content strategy of the lint script ignores file times, which a fresh checkout resets
+      - name: Cache the ESLint results
+        uses: actions/cache@v6
+        with:
+          path: .eslintcache
+          key: eslint-${{ hashFiles('pnpm-lock.yaml', 'eslint.config.mjs') }}-${{ github.sha }}
+          restore-keys: eslint-${{ hashFiles('pnpm-lock.yaml', 'eslint.config.mjs') }}-
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Test
+        run: pnpm run test
+
+  deploy:
+    needs: [ci, cloudflare-access]
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate the static site
+        run: pnpm run generate
+
+      - name: Deploy to Cloudflare Workers
+        run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

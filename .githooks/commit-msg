@@ -1,0 +1,117 @@
+#!/usr/bin/env node
+// Hook version: 1 (shared by the projects: keep the copies identical and bump this number on every change)
+// Enforces "<type>(<scope>)?!?: <emoji> <description>", e.g. "fix(menu): 🩹 handle an empty list"
+// The emoji is any gitmoji (https://gitmoji.dev/), not tied to the type; a breaking change (!) must use 💥
+// Activated by the postinstall script: git config core.hooksPath .githooks
+
+import { readFileSync } from 'node:fs'
+
+const COMMIT_TYPES = ['feat', 'fix', 'docs', 'style', 'refactor', 'perf', 'test', 'build', 'chore', 'ci', 'revert']
+
+// Full gitmoji.dev list (75 entries): shortcode -> [emoji, short meaning]
+const GITMOJI = {
+  art: ['🎨', 'structure'],
+  zap: ['⚡️', 'performance'],
+  fire: ['🔥', 'remove'],
+  bug: ['🐛', 'fix'],
+  ambulance: ['🚑️', 'hotfix'],
+  sparkles: ['✨', 'feature'],
+  memo: ['📝', 'docs'],
+  rocket: ['🚀', 'deploy'],
+  lipstick: ['💄', 'ui'],
+  tada: ['🎉', 'init'],
+  white_check_mark: ['✅', 'tests'],
+  lock: ['🔒️', 'security'],
+  closed_lock_with_key: ['🔐', 'secrets'],
+  bookmark: ['🔖', 'release'],
+  rotating_light: ['🚨', 'lint'],
+  construction: ['🚧', 'wip'],
+  green_heart: ['💚', 'ci-fix'],
+  arrow_down: ['⬇️', 'downgrade'],
+  arrow_up: ['⬆️', 'upgrade'],
+  pushpin: ['📌', 'pin'],
+  construction_worker: ['👷', 'ci'],
+  chart_with_upwards_trend: ['📈', 'analytics'],
+  recycle: ['♻️', 'refactor'],
+  heavy_plus_sign: ['➕', 'add-dependency'],
+  heavy_minus_sign: ['➖', 'remove-dependency'],
+  wrench: ['🔧', 'config'],
+  hammer: ['🔨', 'dev-scripts'],
+  globe_with_meridians: ['🌐', 'i18n'],
+  pencil2: ['✏️', 'typo'],
+  poop: ['💩', 'bad-code'],
+  rewind: ['⏪️', 'revert'],
+  twisted_rightwards_arrows: ['🔀', 'merge'],
+  package: ['📦️', 'build'],
+  alien: ['👽️', 'external-api'],
+  truck: ['🚚', 'move'],
+  page_facing_up: ['📄', 'license'],
+  boom: ['💥', 'breaking'],
+  bento: ['🍱', 'assets'],
+  wheelchair: ['♿️', 'accessibility'],
+  bulb: ['💡', 'comments'],
+  beers: ['🍻', 'yolo'],
+  speech_balloon: ['💬', 'text'],
+  card_file_box: ['🗃️', 'database'],
+  loud_sound: ['🔊', 'logs'],
+  mute: ['🔇', 'remove-logs'],
+  busts_in_silhouette: ['👥', 'contributors'],
+  children_crossing: ['🚸', 'ux'],
+  building_construction: ['🏗️', 'architecture'],
+  iphone: ['📱', 'responsive'],
+  clown_face: ['🤡', 'mock'],
+  egg: ['🥚', 'easter-egg'],
+  see_no_evil: ['🙈', 'gitignore'],
+  camera_flash: ['📸', 'snapshots'],
+  alembic: ['⚗️', 'experiment'],
+  mag: ['🔍️', 'seo'],
+  label: ['🏷️', 'types'],
+  seedling: ['🌱', 'seed'],
+  triangular_flag_on_post: ['🚩', 'feature-flag'],
+  goal_net: ['🥅', 'error-handling'],
+  dizzy: ['💫', 'animation'],
+  wastebasket: ['🗑️', 'deprecate'],
+  passport_control: ['🛂', 'auth'],
+  adhesive_bandage: ['🩹', 'minor-fix'],
+  monocle_face: ['🧐', 'inspect'],
+  coffin: ['⚰️', 'dead-code'],
+  test_tube: ['🧪', 'failing-test'],
+  necktie: ['👔', 'business-logic'],
+  stethoscope: ['🩺', 'healthcheck'],
+  bricks: ['🧱', 'infra'],
+  technologist: ['🧑‍💻', 'dx'],
+  money_with_wings: ['💸', 'sponsorship'],
+  thread: ['🧵', 'concurrency'],
+  safety_vest: ['🦺', 'validation'],
+  airplane: ['✈️', 'offline'],
+  't-rex': ['🦖', 'backwards-compat'],
+}
+
+const VALID_EMOJI = new Set(Object.values(GITMOJI).map(([emoji]) => emoji))
+
+const messageFile = process.argv[2]
+const subject = readFileSync(messageFile, 'utf8').split(/\r?\n/)[0].trim()
+
+// Git-generated messages pass untouched
+if (/^(Merge |Revert "|fixup!|squash!)/.test(subject)) process.exit(0)
+
+function fail(message) {
+  console.error(`\n✗ ${message}\n\n  ${subject}\n`)
+  console.error('  Format: <type>(<scope>)?!?: <emoji> <description>')
+  console.error(`  Types: ${COMMIT_TYPES.join(', ')}`)
+  console.error('  Emoji: any gitmoji from https://gitmoji.dev/, full list in .githooks/commit-msg\n')
+  process.exit(1)
+}
+
+const match = subject.match(/^(\w+)(\([\w./-]+\))?(!)?:\s+(\S+)\s+.+$/u)
+if (!match) fail("Commit subject doesn't match the required format")
+
+const type = match[1]
+const breaking = match[3]
+const emoji = match[4]
+
+if (!COMMIT_TYPES.includes(type)) fail(`Unknown commit type "${type}"`)
+if (!VALID_EMOJI.has(emoji)) fail(`"${emoji}" isn't a valid gitmoji`)
+if (breaking && emoji !== '💥') fail(`Breaking changes (!) must use 💥 (:boom:), got "${emoji}"`)
+
+process.exit(0)

@@ -1,0 +1,18 @@
+{
+  "site": {
+    "name": "Nuxt Template"
+  },
+  "meta": {
+    "description": "Il punto di partenza dei progetti Nuxt."
+  },
+  "home": {
+    "title": "Nuxt Template",
+    "description": "Nuxt, Nuxt UI, i18n e SEO già configurati: si parte da qui."
+  },
+  "error": {
+    "notFoundTitle": "Pagina non trovata",
+    "notFoundDescription": "L'indirizzo non porta a nessuna pagina: forse è stata spostata o rimossa.",
+    "genericTitle": "Qualcosa è andato storto",
+    "genericDescription": "Si è verificato un errore imprevisto. Riprova tra poco."
+  }
+}

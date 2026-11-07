@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "nuxt-template",
+  "compatibility_date": "2026-11-01",
+  // Assets-only Worker: no `main`, Cloudflare serves the `nuxt generate` output directly
+  "assets": {
+    "directory": "./.output/public",
+    "not_found_handling": "404-page",
+    "html_handling": "drop-trailing-slash"
+  }
+  // With a custom domain, add:
+  // "routes": [{ "pattern": "example.org", "custom_domain": true }],
+  // "workers_dev": false,
+  // "preview_urls": false
+}
