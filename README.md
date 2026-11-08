@@ -125,15 +125,16 @@ Component tests (`@nuxt/test-utils`) and Playwright are left out on purpose. Add
 
 ## CI and deploy
 
-`.github/workflows/ci.yml` runs on every push and on manual runs.
+`.github/workflows/ci.yml` runs on every push and on manual runs, except a push that only changes `docs/` or the root `.md` files.
 
 | Job | When | What it does |
 |---|---|---|
 | `ci` | every push | Translation keys, dead code, lint (with a cached result), typecheck, tests |
 | `cloudflare-access` | pushes to `main`, manual runs | Checks in seconds that the Cloudflare token is valid, belongs to the account, can manage Workers and, if set, that the custom domain is attached |
-| `deploy` | after both pass | `pnpm run generate`, then `wrangler deploy` |
+| `build` | pushes to `main`, manual runs, alongside the two above | `pnpm run generate`, uploaded as an artifact |
+| `deploy` | after all three pass | `wrangler deploy` of the artifact, with the lockfile's wrangler version run through a cached `npx` |
 
-A newer push cancels a superseded run on other branches, but never a run on `main`, which may be deploying. Node comes from `volta.node` in `package.json`, so CI and local work run the same version.
+A newer push cancels a superseded run on other branches, but never a run on `main`, which may be deploying. Node comes from `volta.node` in `package.json`, so CI and local work run the same version; it is restored from the Actions cache instead of downloaded in every job.
 
 ### Deploy
 

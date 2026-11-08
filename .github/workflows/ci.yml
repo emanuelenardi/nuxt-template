@@ -1,7 +1,11 @@
 name: ci & deploy
 
+# A push that only changes docs runs nothing
 on:
   push:
+    paths-ignore:
+      - docs/**
+      - "*.md"
   workflow_dispatch:
 
 permissions:
@@ -14,8 +18,8 @@ concurrency:
 
 jobs:
   # cloudflare-access, version 1: the same job is in every project deployed to Cloudflare, only the
-  # env block changes. It runs first, so a wrong account or token fails in seconds instead of after
-  # the build.
+  # env block changes. It runs alongside ci and build, so a wrong account or token turns the run red
+  # in seconds, and the deploy job waits for it.
   cloudflare-access:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-26.04
@@ -67,6 +71,17 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v6
 
+      - name: Read the Node version
+        run: echo "NODE_VERSION=$(jq -r .volta.node package.json)" >> "$GITHUB_ENV"
+
+      # setup-node finds this copy in the tool cache and skips the download from actions/node-versions,
+      # which takes about 10 s and often answers 504 three times before falling back to nodejs.org
+      - name: Cache node
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.tool_cache }}/node/${{ env.NODE_VERSION }}
+          key: node-${{ env.NODE_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
       - name: Install node
         uses: actions/setup-node@v7
         with:
@@ -100,12 +115,9 @@ jobs:
       - name: Test
         run: pnpm run test
 
-  deploy:
-    needs: [ci, cloudflare-access]
+  # Runs alongside ci instead of after it, and hands the site to the deploy job
+  build:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    concurrency:
-      group: deploy
-      cancel-in-progress: false
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout
@@ -114,9 +126,21 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v6
 
+      - name: Read the Node version
+        run: echo "NODE_VERSION=$(jq -r .volta.node package.json)" >> "$GITHUB_ENV"
+
+      # setup-node finds this copy in the tool cache and skips the download from actions/node-versions,
+      # which takes about 10 s and often answers 504 three times before falling back to nodejs.org
+      - name: Cache node
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.tool_cache }}/node/${{ env.NODE_VERSION }}
+          key: node-${{ env.NODE_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
       - name: Install node
         uses: actions/setup-node@v7
         with:
+          # Reads volta.node, so CI runs the exact version pinned for local work
           node-version-file: package.json
           cache: pnpm
 
@@ -126,8 +150,57 @@ jobs:
       - name: Generate the static site
         run: pnpm run generate
 
+      - name: Upload the site
+        uses: actions/upload-artifact@v7
+        with:
+          name: site
+          path: .output/public
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    needs: [ci, build, cloudflare-access]
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    runs-on: ubuntu-26.04
+
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      npm_config_prefer_offline: true
+
+    steps:
+      # Nothing to build or install: the Worker config and the locked wrangler version. wrangler runs
+      # on the runner's preinstalled Node, since it only uploads the site
+      - name: Checkout the Worker config
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            wrangler.jsonc
+            pnpm-lock.yaml
+          sparse-checkout-cone-mode: false
+
+      # The wrangler version pnpm-lock.yaml resolves, run with npx instead of pnpm install
+      - name: Find the wrangler version
+        run: |
+          version=$(grep -A2 '^      wrangler:$' pnpm-lock.yaml | sed -n 's/^ *version: \([0-9][0-9.]*\).*/\1/p')
+          [ -n "$version" ] || { echo "::error::No wrangler version found in pnpm-lock.yaml"; exit 1; }
+          echo "WRANGLER=wrangler@$version" >> "$GITHUB_ENV"
+
+      # npx reads the package and its metadata from this cache instead of the registry
+      - name: Cache wrangler
+        uses: actions/cache@v6
+        with:
+          path: ~/.npm
+          key: npx-${{ env.WRANGLER }}-${{ runner.os }}
+
+      - name: Download the site
+        uses: actions/download-artifact@v8
+        with:
+          name: site
+          path: .output/public
+
       - name: Deploy to Cloudflare Workers
-        run: pnpm exec wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes "$WRANGLER" deploy
