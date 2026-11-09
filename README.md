@@ -71,6 +71,7 @@ docs/                    project documentation (see below)
 | `pnpm test` / `pnpm test:watch` | Vitest, once or in watch mode |
 | `pnpm test:coverage` | Vitest with v8 coverage over `app/`, `server/` and `shared/` |
 | `pnpm check:i18n` | Translation keys exist and match across locales |
+| `pnpm shared:status` | Compares the `@shared` files of every project under `Coding/` with the copies here |
 | `pnpm fallow:dead-code` | Unused files, exports and dependencies |
 | `pnpm fallow:dupes` | Duplicated code |
 | `pnpm fallow:health` | Complexity score, hotspots and refactoring targets |
@@ -177,6 +178,18 @@ Three files carry a version number in their header and are meant to stay identic
 - `scripts/check-i18n-keys.mjs`
 
 To change one: edit it here first, bump its version, then copy it into each project. Projects only add their own blocks (generated-file ignores, project CSS classes, per-file overrides) below the marker line.
+
+App code shared the same way carries a machine-readable first line (after a project's own path comment, where it has one):
+
+```ts
+// @shared timeSince v1 (keep the copies identical: change it in personal/nuxt-template first, bump the number)
+```
+
+| Piece | Files |
+|---|---|
+| `timeSince` | `shared/utils/timeSince.ts`, `test/unit/shared/timeSince.test.ts` (the test may sit elsewhere in a project, its content stays the same) |
+
+`pnpm shared:status` lists every marked file in the projects under `Coding/` as up to date, outdated or changed locally. `node scripts/shared-status.mjs --write <name> <project folder>` copies the canonical version over a project's marked copy, keeping its path comment; it refuses a locally changed copy unless `--force` is added. The first copy into a project is by hand. This is a stopgap before a Nuxt layer: which version of each piece won and why is in the knowledge base, `SHARED-PIECES-INVENTORY.md`.
 
 ## Known limitations
 

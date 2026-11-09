@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "check:i18n": "node scripts/check-i18n-keys.mjs",
+    "shared:status": "node scripts/shared-status.mjs",
     "fallow:audit": "fallow audit",
     "fallow:dead-code": "fallow dead-code",
     "fallow:dupes": "fallow dupes",
