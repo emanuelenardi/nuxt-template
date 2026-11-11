@@ -1,8 +1,10 @@
-// Script version: 4 (shared by the projects: keep the copies identical and bump this number on every change)
-// Checks the i18n/locales/*.json files of the project:
+// Script version: 5 (shared by the projects: keep the copies identical and bump this number on every change)
+// Checks the i18n/locales/*.json files of the project (another folder with `--locales-directory <path>`,
+// e.g. a Nuxt layer's):
 //   1. no key is written twice in the same object of a locale file: JSON.parse keeps only the last
 //      one, so the first value would be lost without any warning
-//   2. every literal t('...') / $t('...') key in app/, server/ and shared/ exists in the default locale
+//   2. every literal t('...') / $t('...') key in app/, server/ and shared/ (or the folders given by
+//      `--source-directory <path>`, repeatable) exists in the default locale
 //      (it.json, or the first file when there is no it.json); template-literal keys are not checked
 //   3. with two or more locale files, every locale has the same keys as all the others, except the
 //      keys under a `--default-locale-only <prefix>` (repeatable), which only the default locale has
@@ -12,17 +14,22 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, extname, basename } from 'node:path'
 
+/** The values that follow every occurrence of a repeatable `--<name> <value>` argument */
+function optionValues(name) {
+  return process.argv
+    .flatMap((argument, index) => argument === name && process.argv[index + 1] ? [process.argv[index + 1]] : [])
+}
+
 const ROOT = process.cwd()
-const LOCALES_DIRECTORY = join(ROOT, 'i18n', 'locales')
-const SOURCE_DIRECTORIES = ['app', 'server', 'shared']
+const LOCALES_DIRECTORY = join(ROOT, optionValues('--locales-directory')[0] ?? join('i18n', 'locales'))
+const sourceDirectoryOptions = optionValues('--source-directory')
+const SOURCE_DIRECTORIES = sourceDirectoryOptions.length > 0 ? sourceDirectoryOptions : ['app', 'server', 'shared']
 const SOURCE_EXTENSIONS = new Set(['.vue', '.ts'])
 const SKIPPED_DIRECTORIES = new Set(['node_modules', '.nuxt', '.output'])
 const DEFAULT_LOCALE = 'it'
 
 /** The key prefixes only the default locale translates, from `--default-locale-only <prefix>` */
-const defaultLocaleOnlyPrefixes = process.argv
-  .flatMap((argument, index) =>
-    argument === '--default-locale-only' && process.argv[index + 1] ? [process.argv[index + 1]] : [])
+const defaultLocaleOnlyPrefixes = optionValues('--default-locale-only')
 
 // Literal-key calls only; template-literal and variable keys can't be resolved statically
 const CALL_PATTERN = /\$?\bt\(\s*['"]([a-zA-Z0-9_.]+)['"]/g
@@ -112,7 +119,7 @@ const localeFiles = readdirSync(LOCALES_DIRECTORY)
   .sort()
 
 if (localeFiles.length === 0) {
-  console.error('No locale file found in i18n/locales.')
+  console.error(`No locale file found in ${LOCALES_DIRECTORY.slice(ROOT.length + 1)}.`)
   process.exit(2)
 }
 
