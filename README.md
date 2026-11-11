@@ -177,7 +177,7 @@ Three files carry a version number in their header and are meant to stay identic
 - `.githooks/commit-msg`
 - `scripts/check-i18n-keys.mjs`
 
-To change one: edit it here first, bump its version, then copy it into each project. Projects only add their own blocks (generated-file ignores, project CSS classes, per-file overrides) below the marker line.
+To change one: edit it here first, bump its version, record what changed in `docs/architecture/shared-files.md`, then copy it into each project. Projects only add their own blocks (generated-file ignores, project CSS classes, per-file overrides) below the marker line.
 
 App code shared the same way carries a machine-readable first line (after a project's own path comment, where it has one):
 
